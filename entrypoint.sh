@@ -16,68 +16,81 @@ if [[ -z "$GITHUB_EVENT_PATH" ]]; then
   exit 1
 fi
 
-addLabel=$ADD_LABEL
-if [[ -n "$LABEL_NAME" ]]; then
-  echo "Warning: Plase define the ADD_LABEL variable instead of the deprecated LABEL_NAME."
-  addLabel=$LABEL_NAME
-fi
-
-if [[ -z "$addLabel" ]]; then
-  echo "Set the ADD_LABEL or the LABEL_NAME env variable."
-  exit 1
-fi
-
 URI="https://api.github.com"
 API_HEADER="Accept: application/vnd.github.v3+json"
 AUTH_HEADER="Authorization: token ${GITHUB_TOKEN}"
 
-action=$(jq --raw-output .action "$GITHUB_EVENT_PATH")
-state=$(jq --raw-output .review.state "$GITHUB_EVENT_PATH")
+action=$(jq --raw-output .action "$GITHUB_EVENT_PATH" | tr '[:upper:]' '[:lower:]')
+state=$(jq --raw-output .review.state "$GITHUB_EVENT_PATH" | tr '[:upper:]' '[:lower:]')
 number=$(jq --raw-output .pull_request.number "$GITHUB_EVENT_PATH")
+reviewer=$(jq --raw-output .sender.login "$GITHUB_EVENT_PATH")
+
+
+get_label() {
+  declare -A first_names=(
+    [or]="Oliver 👍"
+    [fkoester]="Fabian 👍"
+    [azd325]="Tim :+1:"
+    [andreaseichelberg]="Andreas 👍"
+    [klausbreuer]="Klaus 👍"
+    [mbertheau]="Markus 👍"
+  )
+
+  user=$(echo "$1" | tr '[:upper:]' '[:lower:]')
+  label="${first_names[$user]}"
+  echo "$label"
+}
+
+urlencode() {
+  local length="${#1}"
+  for (( i = 0; i < length; i++ )); do
+    local c="${1:i:1}"
+    case $c in
+      [a-zA-Z0-9.~_-]) printf "$c" ;;
+      *) printf "$c" | xxd -p -c1 | while read x;do printf "%%%s" "$x";done
+    esac
+  done
+}
 
 label_when_approved() {
-  # https://developer.github.com/v3/pulls/reviews/#list-reviews-on-a-pull-request
-  body=$(curl -sSL -H "${AUTH_HEADER}" -H "${API_HEADER}" "${URI}/repos/${GITHUB_REPOSITORY}/pulls/${number}/reviews?per_page=100")
-  reviews=$(echo "$body" | jq --raw-output '.[] | {state: .state} | @base64')
+  echo "Labeling pull request"
 
-  approvals=0
+  label="$(get_label "$reviewer")"
+  if [[ ! -z "label" ]]; then
+    curl -sSL \
+      -H "${AUTH_HEADER}" \
+      -H "${API_HEADER}" \
+      -X POST \
+      -H "Content-Type: application/json" \
+      -d "{\"labels\":[\"${label}\"]}" \
+      "${URI}/repos/${GITHUB_REPOSITORY}/issues/${number}/labels"
+  fi
+}
 
-  for r in $reviews; do
-    review="$(echo "$r" | base64 -d)"
-    rState=$(echo "$review" | jq --raw-output '.state')
+label_when_changes_requested() {
+  label="$(get_label "$reviewer")"
 
-    if [[ "$rState" == "APPROVED" ]]; then
-      approvals=$((approvals+1))
-    fi
+  encoded_label=$(urlencode "$label")
+  curl -sSL \
+    -H "${AUTH_HEADER}" \
+    -H "${API_HEADER}" \
+    -X DELETE \
+    "${URI}/repos/${GITHUB_REPOSITORY}/issues/${number}/labels/${encoded_label}"
 
-    echo "${approvals}/${APPROVALS} approvals"
-
-    if [[ "$approvals" -ge "$APPROVALS" ]]; then
-      echo "Labeling pull request"
-
-      curl -sSL \
-        -H "${AUTH_HEADER}" \
-        -H "${API_HEADER}" \
-        -X POST \
-        -H "Content-Type: application/json" \
-        -d "{\"labels\":[\"${addLabel}\"]}" \
-        "${URI}/repos/${GITHUB_REPOSITORY}/issues/${number}/labels"
-
-      if [[ -n "$REMOVE_LABEL" ]]; then
-          curl -sSL \
-            -H "${AUTH_HEADER}" \
-            -H "${API_HEADER}" \
-            -X DELETE \
-            "${URI}/repos/${GITHUB_REPOSITORY}/issues/${number}/labels/${REMOVE_LABEL}"
-      fi
-
-      break
-    fi
-  done
+  changes_requested_label="Has open questions"
+  curl -sSL \
+    -H "${AUTH_HEADER}" \
+    -H "${API_HEADER}" \
+    -X POST \
+    -H "Content-Type: application/json" \
+    -d "{\"labels\":[\"${changes_requested_label}\"]}" \
+    "${URI}/repos/${GITHUB_REPOSITORY}/issues/${number}/labels"
 }
 
 if [[ "$action" == "submitted" ]] && [[ "$state" == "approved" ]]; then
   label_when_approved
+elif [[ "$action" == "submitted" ]] && [[ "$state" == "changes_requested" ]]; then
+  label_when_changes_requested
 else
   echo "Ignoring event ${action}/${state}"
 fi
