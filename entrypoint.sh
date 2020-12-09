@@ -31,7 +31,7 @@ get_label() {
     [or]="Oliver 👍"
     [fkoester]="Fabian 👍"
     [azd325]="Tim :+1:"
-    [andreaseichelberg]="Andreas 👍"
+    [andreaseichelberg]="Andi 👍"
     [klausbreuer]="Klaus 👍"
     [mbertheau]="Markus 👍"
   )
